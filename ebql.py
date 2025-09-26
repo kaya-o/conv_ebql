@@ -1,9 +1,11 @@
 # ebql.py
 from __future__ import annotations
 
+import argparse
 import random
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
+from pathlib import Path
 from typing import Tuple, Optional, List
 
 import numpy as np
@@ -96,29 +98,32 @@ class EBQLConfig:
     epsilon_end: float = 0.05
     epsilon_decay_steps: int = 750_000
     bootstrap_prob: float = 0.5         # P(mask=1) per head per transition
-    hidden_sizes: Tuple[int, ...] = (512,)
+    hidden_sizes: Tuple[int, ...] = (128,)
+    conv_channels: Tuple[int, int, int] = (16, 32, 32)
     clip_grad_norm: Optional[float] = 10.0     # ← NEW (set None to disable)
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     seed: int = 0
     train_csv_path: Optional[str] = "train_rewards.csv"
     eval_csv_path: Optional[str] = "eval_rewards.csv"
     frame_stack: int = 4
+    model_path: Optional[str] = "model.pt"
 
 
 class EnsembleConvHeads(nn.Module):
     """Shared convolutional encoder with independent linear heads."""
 
-    def __init__(self, obs_shape: Tuple[int, ...], n_actions: int, K: int, hidden_sizes: Tuple[int, ...]):
+    def __init__(self, obs_shape: Tuple[int, ...], n_actions: int, K: int, hidden_sizes: Tuple[int, ...], conv_channels: Tuple[int, int, int]):
         super().__init__()
         assert len(obs_shape) == 3, "Expected CHW observation shape"
         in_channels = obs_shape[0]
 
+        c1, c2, c3 = conv_channels
         self.conv = nn.Sequential(
-            nn.Conv2d(in_channels, 32, kernel_size=8, stride=4),
+            nn.Conv2d(in_channels, c1, kernel_size=8, stride=4),
             nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2),
+            nn.Conv2d(c1, c2, kernel_size=4, stride=2),
             nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1),
+            nn.Conv2d(c2, c3, kernel_size=3, stride=1),
             nn.ReLU(),
         )
 
@@ -216,8 +221,8 @@ class EBQLAgent:
         self.K = cfg.K
 
         # Networks
-        self.q = EnsembleConvHeads(self.obs_shape, self.n_actions, self.K, cfg.hidden_sizes).to(self.device)
-        self.q_targ = EnsembleConvHeads(self.obs_shape, self.n_actions, self.K, cfg.hidden_sizes).to(self.device)
+        self.q = EnsembleConvHeads(self.obs_shape, self.n_actions, self.K, cfg.hidden_sizes, cfg.conv_channels).to(self.device)
+        self.q_targ = EnsembleConvHeads(self.obs_shape, self.n_actions, self.K, cfg.hidden_sizes, cfg.conv_channels).to(self.device)
         self.q_targ.load_state_dict(self.q.state_dict()); self.q_targ.eval()
         self.optim = optim.Adam(self.q.parameters(), lr=cfg.lr)
 
@@ -236,6 +241,9 @@ class EBQLAgent:
         self._active_head = int(self.rng.integers(0, self.K)) if self.K > 0 else 0
         self.train_csv_path = cfg.train_csv_path
         self.eval_csv_path = cfg.eval_csv_path
+        self.model_path = cfg.model_path
+        if self.model_path:
+            Path(self.model_path).parent.mkdir(parents=True, exist_ok=True)
 
     # ---------- acting ----------
     def _convert_obs(self, obs) -> np.ndarray:
@@ -404,6 +412,36 @@ class EBQLAgent:
             },
         )
 
+    # ---------- persistence ----------
+    def save_model(self, path: Optional[str] = None) -> None:
+        target_path = path or self.model_path
+        if not target_path:
+            return
+        Path(target_path).parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "config": asdict(self.cfg),
+            "step_count": self.step_count,
+            "episode_idx": self._episode_idx,
+            "epsilon": self.eps,
+            "model": self.q.state_dict(),
+            "target_model": self.q_targ.state_dict(),
+            "optimizer": self.optim.state_dict(),
+        }
+        torch.save(payload, target_path)
+
+    def load_model(self, path: Optional[str] = None, strict: bool = True) -> None:
+        source_path = path or self.model_path
+        if not source_path:
+            raise ValueError("No model path provided for loading.")
+        payload = torch.load(source_path, map_location=self.device)
+        self.q.load_state_dict(payload["model"], strict=strict)
+        self.q_targ.load_state_dict(payload.get("target_model", payload["model"]), strict=strict)
+        if "optimizer" in payload:
+            self.optim.load_state_dict(payload["optimizer"])
+        self.step_count = int(payload.get("step_count", 0))
+        self._episode_idx = int(payload.get("episode_idx", 0))
+        self.eps = float(payload.get("epsilon", self.cfg.epsilon_start))
+
     # ---------- evaluation ----------
     @torch.no_grad()
     def evaluate(self, eval_env: gym.Env, episodes: int = 10) -> float:
@@ -428,15 +466,50 @@ class EBQLAgent:
 # Minimal usage example
 # =========================
 if __name__ == "__main__":
-    cfg = EBQLConfig(K=5)
-    env = make_spaceinvaders_env(seed=cfg.seed, frame_stack=cfg.frame_stack)
-    eval_env = make_spaceinvaders_env(seed=cfg.seed + 1, frame_stack=cfg.frame_stack)
+    parser = argparse.ArgumentParser(description="Train EBQL on Space Invaders across multiple seeds")
+    parser.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2, 3, 4], help="Seeds to run")
+    parser.add_argument("--run-name", type=str, default="spaceinvaders_k5", help="Name for the run directory under ./runs")
+    parser.add_argument("--total-steps", type=int, default=2_000_000)
+    parser.add_argument("--eval-every", type=int, default=100_000)
+    parser.add_argument("--eval-episodes", type=int, default=20)
+    parser.add_argument("--K", type=int, default=5, help="Ensemble size override")
+    args = parser.parse_args()
 
-    agent = EBQLAgent(env, cfg)
+    base_dir = Path("runs") / args.run_name
+    base_dir.mkdir(parents=True, exist_ok=True)
 
-    agent.train(
-        total_steps=2_000_000,
-        eval_env=eval_env,
-        eval_every=100_000,
-        eval_episodes=20,
-    )
+    print(f"[EBQL] Starting run '{args.run_name}' for seeds: {args.seeds}")
+
+    for seed in args.seeds:
+        run_dir = base_dir / f"seed_{seed}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        train_csv = run_dir / "train_rewards.csv"
+        eval_csv = run_dir / "eval_rewards.csv"
+        model_path = run_dir / "final_model.pt"
+
+        cfg = EBQLConfig(
+            K=args.K,
+            seed=seed,
+            train_csv_path=str(train_csv),
+            eval_csv_path=str(eval_csv),
+            model_path=str(model_path),
+        )
+
+        env = make_spaceinvaders_env(seed=seed, frame_stack=cfg.frame_stack)
+        eval_env = make_spaceinvaders_env(seed=seed + 10_000, frame_stack=cfg.frame_stack)
+
+        agent = EBQLAgent(env, cfg)
+
+        print(f"[EBQL] Seed {seed}: training for {args.total_steps:,} steps")
+        agent.train(
+            total_steps=args.total_steps,
+            eval_env=eval_env,
+            eval_every=args.eval_every,
+            eval_episodes=args.eval_episodes,
+        )
+
+        agent.save_model()
+        env.close()
+        eval_env.close()
+        print(f"[EBQL] Seed {seed}: complete. Logs in {run_dir}")
