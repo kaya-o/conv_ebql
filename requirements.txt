@@ -2,3 +2,4 @@ numpy
 torch
 gymnasium
 ale-py
+gymnasium[other]
