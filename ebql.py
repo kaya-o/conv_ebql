@@ -473,12 +473,33 @@ if __name__ == "__main__":
     parser.add_argument("--eval-every", type=int, default=100_000)
     parser.add_argument("--eval-episodes", type=int, default=20)
     parser.add_argument("--K", type=int, default=5, help="Ensemble size override")
+    parser.add_argument("--proof-of-concept", action="store_true", help="Run a short, cheap proof-of-concept training session")
     args = parser.parse_args()
 
     base_dir = Path("runs") / args.run_name
     base_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"[EBQL] Starting run '{args.run_name}' for seeds: {args.seeds}")
+
+    total_steps = args.total_steps
+    eval_every = args.eval_every
+    eval_episodes = args.eval_episodes
+
+    cfg_overrides = {}
+    if args.proof_of_concept:
+        print("[EBQL] Proof-of-concept mode: using lighter config for a quick sanity check")
+        total_steps = min(total_steps, 120_000)
+        eval_every = min(eval_every, 10_000)
+        eval_episodes = max(eval_episodes, 5)
+        cfg_overrides.update(
+            buffer_size=75_000,
+            batch_size=128,
+            learning_starts=2_000,
+            epsilon_start=0.6,
+            epsilon_end=0.05,
+            epsilon_decay_steps=90_000,
+            target_update_interval=5_000,
+        )
 
     for seed in args.seeds:
         run_dir = base_dir / f"seed_{seed}"
@@ -494,6 +515,7 @@ if __name__ == "__main__":
             train_csv_path=str(train_csv),
             eval_csv_path=str(eval_csv),
             model_path=str(model_path),
+            **cfg_overrides,
         )
 
         env = make_spaceinvaders_env(seed=seed, frame_stack=cfg.frame_stack)
@@ -501,12 +523,12 @@ if __name__ == "__main__":
 
         agent = EBQLAgent(env, cfg)
 
-        print(f"[EBQL] Seed {seed}: training for {args.total_steps:,} steps")
+        print(f"[EBQL] Seed {seed}: training for {total_steps:,} steps")
         agent.train(
-            total_steps=args.total_steps,
+            total_steps=total_steps,
             eval_env=eval_env,
-            eval_every=args.eval_every,
-            eval_episodes=args.eval_episodes,
+            eval_every=eval_every,
+            eval_episodes=eval_episodes,
         )
 
         agent.save_model()
