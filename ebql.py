@@ -98,8 +98,8 @@ class EBQLConfig:
     epsilon_end: float = 0.05
     epsilon_decay_steps: int = 750_000
     bootstrap_prob: float = 0.5         # P(mask=1) per head per transition
-    hidden_sizes: Tuple[int, ...] = (128,)
-    conv_channels: Tuple[int, int, int] = (16, 32, 32)
+    hidden_sizes: Tuple[int, ...] = (512,)
+    conv_channels: Tuple[int, int, int] = (32, 64, 64)
     clip_grad_norm: Optional[float] = 10.0     # ← NEW (set None to disable)
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     seed: int = 0

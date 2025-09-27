@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=ebql_k10
+#SBATCH --job-name=ebql_k
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
@@ -18,15 +18,20 @@ else
     pip install -r requirements.txt
 fi
 
-# Ensure dependencies are up to date (comment out if not desired)
 pip install -r requirements.txt
 
 mkdir -p logs
 
+K_VALUE=${K:-5}
+RUN_NAME=${RUN_NAME:-spaceinvaders_k${K_VALUE}_full}
+SEEDS=${SEEDS:-"0 1 2 3 4"}
+
+echo "[EBQL] Running with K=${K_VALUE}, run name=${RUN_NAME}, seeds=${SEEDS}"
+
 python ebql.py \
-    --run-name spaceinvaders_k10_full \
-    --seeds 0 1 2 3 4 \
+    --run-name "${RUN_NAME}" \
+    --seeds ${SEEDS} \
     --total-steps 2000000 \
     --eval-every 100000 \
     --eval-episodes 20 \
-    --K 10
+    --K "${K_VALUE}"
