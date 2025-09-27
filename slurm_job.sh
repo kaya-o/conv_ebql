@@ -11,20 +11,20 @@
 #SBATCH --get-user-env
 
 # Activate the virtual environment (create it first if it does not exist)
-if [ -d .venv ]; then
-    source .venv/bin/activate
-else
-    python -m venv .venv
-    source .venv/bin/activate
-    pip install --upgrade pip
-    pip install -r requirements.txt
-fi
-
-pip install -r requirements.txt
-
-mkdir -p logs
-
-echo "[EBQL] Running with K=${K_VALUE}, run name=${RUN_NAME}, seeds=${SEEDS}"
+#if [ -d .venv ]; then
+#    source .venv/bin/activate
+#else
+#    python -m venv .venv
+#    source .venv/bin/activate
+#    pip install --upgrade pip
+#    pip install -r requirements.txt
+#fi
+#
+#pip install -r requirements.txt
+#
+#mkdir -p logs
+#
+#echo "[EBQL] Running with K=${K_VALUE}, run name=${RUN_NAME}, seeds=${SEEDS}"
 
 python ebql.py \
     --run-name "ebql_k10" \

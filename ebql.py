@@ -66,8 +66,19 @@ class FrameStack(gym.Wrapper):
         return np.stack(self.frames, axis=0)
 
 
+class ClipReward(gym.RewardWrapper):
+    """Clip rewards to a fixed range, default [-1, 1]."""
+
+    def __init__(self, env: gym.Env, magnitude: float = 1.0):
+        super().__init__(env)
+        self.magnitude = float(magnitude)
+
+    def reward(self, reward):
+        return float(np.clip(reward, -self.magnitude, self.magnitude))
+
+
 def make_spaceinvaders_env(seed: int, frame_stack: int) -> gym.Env:
-    env = gym.make("ALE/SpaceInvaders-v5", frameskip=1)
+    env = gym.make("ALE/SpaceInvaders-v5", frameskip=1, repeat_action_probability=0.25)
     env = AtariPreprocessing(
         env,
         noop_max=30,
@@ -79,6 +90,7 @@ def make_spaceinvaders_env(seed: int, frame_stack: int) -> gym.Env:
         scale_obs=False,
     )
     env = FrameStack(env, frame_stack)
+    env = ClipReward(env, magnitude=1.0)
     env.reset(seed=seed)
     env.action_space.seed(seed)
     return env
@@ -95,8 +107,8 @@ class EBQLConfig:
     target_update_interval: int = 10_000
     tau: float = 1.0                    # 1.0 = hard update; <1.0 = soft polyak
     epsilon_start: float = 1.0
-    epsilon_end: float = 0.05
-    epsilon_decay_steps: int = 750_000
+    epsilon_end: float = 0.01
+    epsilon_decay_steps: int = 1_000_000
     bootstrap_prob: float = 0.5         # P(mask=1) per head per transition
     hidden_sizes: Tuple[int, ...] = (512,)
     conv_channels: Tuple[int, int, int] = (32, 64, 64)
